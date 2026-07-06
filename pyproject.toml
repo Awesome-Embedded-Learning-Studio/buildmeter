@@ -20,6 +20,11 @@ classifiers = [
 [project.optional-dependencies]
 rich = ["rich>=13"]
 
+[project.urls]
+Homepage = "https://github.com/Awesome-Embedded-Learning-Studio/buildmeter"
+Repository = "https://github.com/Awesome-Embedded-Learning-Studio/buildmeter"
+Issues = "https://github.com/Awesome-Embedded-Learning-Studio/buildmeter/issues"
+
 [project.scripts]
 buildmeter = "buildmeter.cli:main"
 
