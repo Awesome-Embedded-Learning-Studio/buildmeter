@@ -91,7 +91,10 @@ def render_bar(parser, total, elapsed, log_path='', bar_width=28, last_raw=''):
         # user knows WHERE it is, not just how many pkgs rotated. Kernel doesn't
         # need this — its current_label (CC path) already shows on the raw line.
         if parser.unit == 'pkgs' and parser.current_label:
-            head += f'  [{parser.current_label}]'
+            label = parser.current_label
+            if getattr(parser, 'inner_count', 0):
+                label += f' · {parser.inner_count} steps'
+            head += f'  [{label}]'
     else:
         rate = done / elapsed if elapsed > 0.3 else 0.0
         head = f'{done} {parser.unit} done  {rate:.1f}/s  elapsed {fmt_dur(elapsed)}'

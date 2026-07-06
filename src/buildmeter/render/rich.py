@@ -70,7 +70,10 @@ class RichRenderer:
             # buildroot: append current pkg:stage (coarse pkg-level % otherwise
             # sits frozen during a multi-minute configure). Kernel skips this.
             if unit == 'pkgs' and parser is not None and parser.current_label:
-                parts += ['  ', (f'[{parser.current_label}]', 'yellow')]
+                label = parser.current_label
+                if getattr(parser, 'inner_count', 0):
+                    label += f' · {parser.inner_count} steps'
+                parts += ['  ', (f'[{label}]', 'yellow')]
             return Text.assemble(*parts)
         rate = done / elapsed if elapsed > 0.3 else 0.0
         return Text.assemble(

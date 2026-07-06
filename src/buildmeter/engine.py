@@ -56,23 +56,35 @@ class BuildrootParser:
     name = 'buildroot'
     unit = 'pkgs'
     _re = re.compile(r'^>>>\s+(\S+)\s{2,}(\S.*?)\s*$')
+    # make-based pkg-internal step lines (autotools CC/CCLD/LIBTOOL, kbuild
+    # CC/LD/AR/AS). Counted as in-pkg activity so a multi-minute configure/build
+    # of ONE pkg shows steps ticking instead of a frozen N/(N+1) bar. meson/cmake
+    # pkgs emit different formats and won't match — they just don't get the
+    # in-pkg step count (a future profile can add them).
+    _inner_re = re.compile(r'^\s*(CC|CCLD|LD|AR|AS|LIBTOOL)\b')
 
     def __init__(self):
         self.seen = set()
         self.current = None
         self.current_stage = None
         self.done = 0
+        self.inner_count = 0  # in-pkg make steps for the CURRENT pkg (resets on rotation)
 
     def feed(self, line):
-        m = self._re.match(unwrap_recipe(strip_ansi(line.rstrip('\n'))))
-        if not m:
-            return False
-        pkg, stage = m.group(1), m.group(2)
-        if self.current is not None and pkg != self.current:
-            self.done += 1  # previous package rotated out -> completed
-        self.seen.add(pkg)
-        self.current, self.current_stage = pkg, stage
-        return True
+        target = unwrap_recipe(strip_ansi(line.rstrip('\n')))
+        m = self._re.match(target)
+        if m:
+            pkg, stage = m.group(1), m.group(2)
+            if self.current is not None and pkg != self.current:
+                self.done += 1  # previous package rotated out -> completed
+                self.inner_count = 0  # new pkg → reset its in-pkg step count
+            self.seen.add(pkg)
+            self.current, self.current_stage = pkg, stage
+            return True
+        # not a >>> pkg line — a make-based in-pkg step? count as activity.
+        if self._inner_re.match(target):
+            self.inner_count += 1
+        return False
 
     def finalize(self):
         # The active package at clean EOF never rotates (no successor) -> count
