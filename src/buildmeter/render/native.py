@@ -2,9 +2,14 @@
 
 Two-line display updated in place via cursor-up: [bar + count + ETA + log path]
 over [latest raw make line]. Works in any terminal; the rich backend
-(buildmeter/render/rich.py) is the planned fancier alternative."""
+(buildmeter/render/rich.py) is the alternative when rich is installed.
+
+Exposes both the stateless render_bar/render_frame functions (tests, external
+use) and a NativeRenderer class — the stateful sink cli.py drives via
+begin(total) → tick(per line) → end → error_dump."""
 import os
 import re
+import sys
 
 ESC = '\x1b'
 
@@ -102,3 +107,71 @@ def render_frame(parser, total, elapsed, log_path, last_raw):
     if len(l2) > cols:
         l2 = l2[:cols - 1] + '…'
     return l1, l2
+
+
+class NativeRenderer:
+    """Stateful ANSI sink — the original two-line cursor-up display. cli drives
+    it via begin(total) → tick(per line) → end → error_dump. Wraps the stateless
+    render_frame/render_bar above; behavior is identical to the pre-backend cli."""
+
+    def __init__(self, is_tty, log_path=''):
+        self.is_tty = is_tty
+        self.log = log_path
+        self.last_render = 0.0
+        self.lines_drawn = 0
+        self.last_snap_done = 0
+        self.last_snap_time = 0.0
+        self.snap_event_step = 0
+        self.snap_time_step = 0.0
+
+    def begin(self, total):
+        if total:
+            self.snap_event_step = max(1, total // 20)
+            self.snap_time_step = 0.0
+        else:
+            self.snap_event_step = 0
+            self.snap_time_step = 3.0
+        if self.is_tty:
+            sys.stderr.write(ESC + '[?25l')  # hide cursor
+            sys.stderr.flush()
+
+    def tick(self, parser, total, elapsed, last_raw):
+        if self.is_tty:
+            # Refresh ~10fps so the live raw line keeps flowing.
+            if (elapsed - self.last_render) >= 0.1:
+                self.last_render = elapsed
+                l1, l2 = render_frame(parser, total, elapsed, self.log, last_raw)
+                if self.lines_drawn == 0:
+                    sys.stderr.write(l1 + '\n' + l2)
+                    self.lines_drawn = 2
+                else:
+                    sys.stderr.write(ESC + '[1A\r' + ESC + '[K' + l1 + '\n' + ESC + '[K' + l2)
+                sys.stderr.flush()
+        else:
+            fire = (self.snap_event_step and (parser.done - self.last_snap_done) >= self.snap_event_step) or \
+                   (self.snap_time_step and (elapsed - self.last_snap_time) >= self.snap_time_step)
+            if fire:
+                if self.snap_event_step:
+                    self.last_snap_done = parser.done
+                self.last_snap_time = elapsed
+                sys.stderr.write(render_bar(parser, total, elapsed, self.log) + '\n')
+
+    def end(self, parser, total, elapsed, last_raw):
+        if self.is_tty:
+            l1, l2 = render_frame(parser, total, elapsed, self.log, last_raw)
+            if self.lines_drawn == 0:
+                sys.stderr.write(l1 + '\n' + l2 + '\n')
+            else:
+                sys.stderr.write(ESC + '[1A\r' + ESC + '[K' + l1 + '\n' + ESC + '[K' + l2 + '\n')
+            sys.stderr.write(ESC + '[?25h')  # show cursor
+            sys.stderr.flush()
+        else:
+            sys.stderr.write(render_bar(parser, total, elapsed, self.log) + '\n')
+
+    def error_dump(self, recent):
+        sys.stderr.write('\n' + '=' * 60 + '\n')
+        sys.stderr.write('errors detected during build — last lines:\n')
+        for r in recent:
+            sys.stderr.write('  ' + r + '\n')
+        sys.stderr.write('=' * 60 + '\n')
+        sys.stderr.flush()

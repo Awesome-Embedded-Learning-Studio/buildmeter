@@ -1,28 +1,28 @@
 """Render backend selection — auto-detect rich, fall back to native.
 
-Probes `import rich` at import time. Once a real rich backend lands in
-buildmeter/render/rich.py, it'll be selected automatically for anyone who has
-rich installed (`pip install buildmeter[rich]`), with the zero-dependency native
-ANSI backend as the fallback. The detection is wired NOW so the switch is a
-one-liner later (select on _RICH_AVAILABLE) — see the TODO below.
+get_renderer(is_tty, log_path) returns a RichRenderer when `import rich` succeeds
+(opt-in via `pip install buildmeter[rich]`), else NativeRenderer. Both implement
+the same sink interface (begin/tick/end/error_dump) consumed by cli.py — so the
+backend choice is transparent to the render loop.
 
-Until that backend is implemented, native is used regardless of whether rich is
-installed. Both backends expose the same surface — render_bar(parser, total,
-elapsed, log_path, bar_width, last_raw) and render_frame(parser, total, elapsed,
-log_path, last_raw), plus the ESC constant — consumed by cli.py's render loop.
-"""
+The stateless render_bar/render_frame + ESC are also exported (tests, external
+use); they're always the native impls."""
 try:
-    import rich  # noqa: F401  — probe only, not yet consumed
+    import rich  # noqa: F401  — probe; RichRenderer imports the actual names lazily
     _RICH_AVAILABLE = True
 except ImportError:
     _RICH_AVAILABLE = False
 
-# TODO: once render/rich.py implements a real backend, flip this to select on
-# _RICH_AVAILABLE:
-#     if _RICH_AVAILABLE:
-#         from buildmeter.render.rich import ESC, render_bar, render_frame
-#     else:
-#         from buildmeter.render.native import ESC, render_bar, render_frame
+
+def get_renderer(is_tty, log_path=''):
+    """Pick the render backend: rich if installed, else native ANSI."""
+    if _RICH_AVAILABLE:
+        from buildmeter.render.rich import RichRenderer
+        return RichRenderer(is_tty, log_path)
+    from buildmeter.render.native import NativeRenderer
+    return NativeRenderer(is_tty, log_path)
+
+
 from buildmeter.render.native import ESC, render_bar, render_frame
 
-__all__ = ["ESC", "render_bar", "render_frame", "_RICH_AVAILABLE"]
+__all__ = ["ESC", "render_bar", "render_frame", "get_renderer", "_RICH_AVAILABLE"]

@@ -3,7 +3,8 @@
 
 Live progress meter for GNU make-based builds (kernel kbuild / U-Boot / buildroot):
 parses the build tool's stdout and renders an in-place progress bar on stderr
-(stdout stays clean for piping / logging).
+(stdout stays clean for piping / logging). Backend is auto-selected by
+buildmeter.render: rich if installed, else the stdlib ANSI native renderer.
 
 Replay a captured log (demo / regression test):
   python3 -m buildmeter kernel   build-kernel.log
@@ -35,7 +36,7 @@ import re
 import time
 
 from buildmeter.engine import ERR_RE, PARSERS, strip_ansi, two_pass_total
-from buildmeter.render import ESC, render_bar, render_frame
+from buildmeter.render import get_renderer
 
 
 def main():
@@ -82,29 +83,17 @@ def main():
 
     parser = PARSERS[args.kind]()
     is_tty = sys.stderr.isatty()
-    start = time.monotonic()
-    last_render = 0.0
-    # Non-TTY (CI / redirect): periodic snapshot lines so the bar shows in plain
-    # logs, not just one summary at the end. Known total -> snapshot every ~5% by
-    # events; indeterminate -> every 3s wall-clock.
-    if total:
-        snap_event_step = max(1, total // 20)
-        snap_time_step = 0.0
-    else:
-        snap_event_step = 0
-        snap_time_step = 3.0
-    last_snap_done = 0
-    last_snap_time = 0.0
+    renderer = get_renderer(is_tty, args.log)
+
     # Ringbuffer of recent raw lines + error scan — so a make failure surfaces
     # its error lines instead of being hidden behind the bar.
     recent = collections.deque(maxlen=200)
     saw_error = False
     ignore_re = re.compile(args.ignore_errors) if args.ignore_errors else None
     last_raw = ""
-    lines_drawn = 0  # 0 = first frame; 2 = two lines shown (redraw via cursor-up)
-    if is_tty:
-        sys.stderr.write(ESC + "[?25l")  # hide cursor
-        sys.stderr.flush()
+    start = time.monotonic()
+
+    renderer.begin(total)
     try:
         for line in f:
             raw = strip_ansi(line.rstrip("\n"))
@@ -115,52 +104,20 @@ def main():
                 last_raw = raw
             parser.feed(line)
             elapsed = time.monotonic() - start
-            if is_tty:
-                # Refresh ~10fps so the live raw line keeps flowing — not just on
-                # progress hits (otherwise the bar feels frozen in a silent phase).
-                if (elapsed - last_render) >= 0.1:
-                    last_render = elapsed
-                    l1, l2 = render_frame(parser, total, elapsed, args.log, last_raw)
-                    if lines_drawn == 0:
-                        sys.stderr.write(l1 + "\n" + l2)
-                        lines_drawn = 2
-                    else:
-                        sys.stderr.write(ESC + "[1A\r" + ESC + "[K" + l1 + "\n" + ESC + "[K" + l2)
-                    sys.stderr.flush()
-            else:
-                fire = (snap_event_step and (parser.done - last_snap_done) >= snap_event_step) or \
-                       (snap_time_step and (elapsed - last_snap_time) >= snap_time_step)
-                if fire:
-                    if snap_event_step:
-                        last_snap_done = parser.done
-                    last_snap_time = elapsed
-                    sys.stderr.write(render_bar(parser, total, elapsed, args.log) + "\n")
+            renderer.tick(parser, total, elapsed, last_raw)
             if args.speed:
                 time.sleep(args.speed / 1000.0)
     except KeyboardInterrupt:
-        # Ctrl+C: let finally redraw + restore cursor, exit quietly (no traceback).
-        # make, upstream in the pipe, gets the signal too and stops — user's intent.
+        # Ctrl+C: let finally redraw + restore (native) / stop Live (rich), exit
+        # quietly (no traceback). make, upstream in the pipe, gets the signal too
+        # and stops — user's intent.
         pass
     finally:
         parser.finalize()
         elapsed = time.monotonic() - start
-        if is_tty:
-            l1, l2 = render_frame(parser, total, elapsed, args.log, last_raw)
-            if lines_drawn == 0:
-                sys.stderr.write(l1 + "\n" + l2 + "\n")
-            else:
-                sys.stderr.write(ESC + "[1A\r" + ESC + "[K" + l1 + "\n" + ESC + "[K" + l2 + "\n")
-            sys.stderr.write(ESC + "[?25h")  # show cursor
-            sys.stderr.flush()
-        else:
-            sys.stderr.write(render_bar(parser, total, elapsed, args.log) + "\n")
+        renderer.end(parser, total, elapsed, last_raw)
         if saw_error:
-            sys.stderr.write("\n" + "=" * 60 + "\n")
-            sys.stderr.write("errors detected during build — last lines:\n")
-            for r in recent:
-                sys.stderr.write("  " + r + "\n")
-            sys.stderr.write("=" * 60 + "\n")
-            sys.stderr.flush()
+            renderer.error_dump(recent)
         if is_file:
             f.close()
 
