@@ -36,7 +36,8 @@ import re
 import time
 
 from buildmeter.engine import ERR_RE, PARSERS, strip_ansi, two_pass_total
-from buildmeter.render import get_renderer
+from buildmeter.render import ESC, get_renderer
+from buildmeter.render.native import _SPINNER, fmt_dur
 
 
 def main():
@@ -59,13 +60,31 @@ def main():
 
     # Pre-scan: feed the whole input through the parser, print the unit count,
     # exit. Used by the `make -n -k | buildmeter --count-only` denominator grab.
+    # The dry-run can run 15-30s on a big tree with NO output (make -n is
+    # enumerating silently), so on a TTY show a spinner — same lesson as the
+    # finalizing heartbeat, don't let silence read like a hang. Spinner goes to
+    # stderr (stdout is the count, read by the caller); the line is cleared
+    # before the count is printed.
     if args.count_only:
         p = PARSERS[args.kind]()
         src = open(args.source) if args.source else sys.stdin
+        is_tty = sys.stderr.isatty()
+        start = time.monotonic()
+        last_render = 0.0
         try:
             for line in src:
                 p.feed(line)
+                if is_tty:
+                    elapsed = time.monotonic() - start
+                    if elapsed - last_render >= 0.1:
+                        last_render = elapsed
+                        sp = _SPINNER[int(elapsed * 8) % len(_SPINNER)]
+                        sys.stderr.write(f'\r{sp} scanning dry-run (make -n)… {fmt_dur(elapsed)} elapsed')
+                        sys.stderr.flush()
         finally:
+            if is_tty:
+                sys.stderr.write('\r' + ESC + '[K')  # clear the spinner line
+                sys.stderr.flush()
             if args.source:
                 src.close()
         print(p.discovered)
@@ -100,7 +119,12 @@ def main():
             recent.append(raw)
             if ERR_RE.search(raw) and not (ignore_re and ignore_re.search(raw)):
                 saw_error = True
-            if raw.strip():
+            # Update the displayed raw line (l2) with the latest NON-ignored line:
+            # tolerated noise like uboot's "make: *** [.binman_stamp] Error 103"
+            # (--ignore-errors) must NOT become the displayed line — it would read
+            # as a failure on a build that's actually fine. Ignored lines still go
+            # into `recent` (ringbuffer) for the error dump, just not on display.
+            if raw.strip() and not (ignore_re and ignore_re.search(raw)):
                 last_raw = raw
             parser.feed(line)
             elapsed = time.monotonic() - start
