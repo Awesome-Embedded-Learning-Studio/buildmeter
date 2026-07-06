@@ -61,12 +61,17 @@ class RichRenderer:
             rate = done / elapsed if elapsed > 0.3 else 0.0
             rem = max(total - done, 0)
             eta = fmt_dur(rem / rate) if rate else '--'
-            return Text.assemble(
+            parts = [
                 (bar(pct, 28), 'bold green'), ' ',
                 (f'{done}/{total} {unit} ', 'bold'),
                 (f'({pct:.0f}%) ', 'cyan'),
                 (f'{rate:.1f}/s ETA ', ''), (eta, 'magenta'),
-            )
+            ]
+            # buildroot: append current pkg:stage (coarse pkg-level % otherwise
+            # sits frozen during a multi-minute configure). Kernel skips this.
+            if unit == 'pkgs' and parser is not None and parser.current_label:
+                parts += ['  ', (f'[{parser.current_label}]', 'yellow')]
+            return Text.assemble(*parts)
         rate = done / elapsed if elapsed > 0.3 else 0.0
         return Text.assemble(
             (f'{done} {unit} done  ', 'bold'),

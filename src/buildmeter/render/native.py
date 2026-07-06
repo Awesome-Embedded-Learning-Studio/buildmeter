@@ -86,6 +86,12 @@ def render_bar(parser, total, elapsed, log_path='', bar_width=28, last_raw=''):
         eta = (rem / rate) if rate else None
         eta_s = fmt_dur(eta) if eta else '--'
         head = f'{bar(pct, bar_width)} {done}/{total} {parser.unit} ({pct:.0f}%) {rate:.1f}/s ETA {eta_s}'
+        # buildroot's package-level % is coarse (one pkg can configure for minutes
+        # while the bar sits at N/(N+1) pkgs). Show the current pkg:stage so the
+        # user knows WHERE it is, not just how many pkgs rotated. Kernel doesn't
+        # need this — its current_label (CC path) already shows on the raw line.
+        if parser.unit == 'pkgs' and parser.current_label:
+            head += f'  [{parser.current_label}]'
     else:
         rate = done / elapsed if elapsed > 0.3 else 0.0
         head = f'{done} {parser.unit} done  {rate:.1f}/s  elapsed {fmt_dur(elapsed)}'
