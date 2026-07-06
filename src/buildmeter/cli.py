@@ -78,7 +78,7 @@ def main():
                     elapsed = time.monotonic() - start
                     if elapsed - last_render >= 0.1:
                         last_render = elapsed
-                        sp = _SPINNER[int(elapsed * 8) % len(_SPINNER)]
+                        sp = _SPINNER[int(elapsed * 20) % len(_SPINNER)]
                         sys.stderr.write(f'\r{sp} scanning dry-run (make -n)… {fmt_dur(elapsed)} elapsed')
                         sys.stderr.flush()
         finally:

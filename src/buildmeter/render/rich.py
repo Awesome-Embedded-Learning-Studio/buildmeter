@@ -48,7 +48,7 @@ class RichRenderer:
         done = parser.done if parser else 0
         unit = parser.unit if parser else 'units'
         if total and done > total:
-            spinner = _SPINNER[int(elapsed * 8) % len(_SPINNER)]
+            spinner = _SPINNER[int(elapsed * 20) % len(_SPINNER)]
             return Text.assemble(
                 (bar(100.0, 28), 'bold green'), ' ',
                 (spinner, 'bold yellow'), ' ',

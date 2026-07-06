@@ -76,7 +76,7 @@ def render_bar(parser, total, elapsed, log_path='', bar_width=28, last_raw=''):
     accurate-100% finish, not this case.)"""
     done = parser.done
     if total and done > total:
-        spinner = _SPINNER[int(elapsed * 8) % len(_SPINNER)]
+        spinner = _SPINNER[int(elapsed * 20) % len(_SPINNER)]
         head = (f'{bar(100.0, bar_width)} {spinner} {_finalizing_phase(last_raw)} '
                 f'· {done} {parser.unit} · {fmt_dur(elapsed)} elapsed')
     elif total:
