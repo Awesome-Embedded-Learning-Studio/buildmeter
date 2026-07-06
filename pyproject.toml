@@ -1,0 +1,27 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "buildmeter"
+version = "0.1.0"
+description = "Live progress meters for GNU make-based builds (Linux kernel Kbuild / U-Boot / Buildroot)."
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+authors = [{ name = "Awesome-Embedded-Learning-Studio" }]
+keywords = ["make", "build", "progress", "kbuild", "buildroot", "uboot", "linux", "meter"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Topic :: Software Development :: Build Tools",
+    "Environment :: Console",
+]
+
+[project.optional-dependencies]
+rich = ["rich>=13"]
+
+[project.scripts]
+buildmeter = "buildmeter.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/buildmeter"]
