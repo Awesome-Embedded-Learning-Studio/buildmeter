@@ -43,7 +43,7 @@ from buildmeter.render.native import _SPINNER, fmt_dur
 
 def main():
     ap = argparse.ArgumentParser(prog="buildmeter", description="live build progress meter")
-    ap.add_argument("kind", choices=["buildroot", "kernel"])
+    ap.add_argument("kind", choices=["buildroot", "kernel", "uboot"])
     ap.add_argument("source", nargs="?", help="log file to replay (default: stdin)")
     ap.add_argument("--total", type=int, help="override total denominator")
     ap.add_argument("--speed", type=float, default=0,

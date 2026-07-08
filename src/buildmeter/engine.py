@@ -285,6 +285,14 @@ class KernelParser(BuildParser):
         return f'{self.last[0]} {self.last[1]}'
 
 
+@register
+class UbootParser(KernelParser):
+    """U-Boot is kbuild too (same `  CC`/`  LD`/`  AR`/... output as the Linux
+    kernel), so it reuses KernelParser verbatim — only the profile name differs.
+    Registered as 'uboot'; cli `kind=uboot` picks it up."""
+    name = 'uboot'
+
+
 def two_pass_total(kind, path):
     """Scan a captured log to get the accurate total (denominator) up front."""
     p = PARSERS[kind]()
