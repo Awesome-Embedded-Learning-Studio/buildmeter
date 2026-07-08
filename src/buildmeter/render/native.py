@@ -75,47 +75,77 @@ def render_bar(parser, total, elapsed, log_path='', bar_width=28, last_raw=''):
     visibly alive, the phase says WHY it's slow. (done == total is the normal
     accurate-100% finish, not this case.)"""
     done = parser.done
-    if total and done > total:
+    if getattr(parser, 'finalizing', False):
+        # buildroot tail: image generation (rsync/mkfs/fakeroot) — every package
+        # is built but output has no >>> pkg lines for minutes. Show a full bar +
+        # spinner + phase so it doesn't read as a hang (same lesson as the kernel
+        # post-link tail). Only BuildrootParser sets .finalizing.
+        spinner = _SPINNER[int(elapsed * 20) % len(_SPINNER)]
+        head = (f'{bar(100.0, bar_width)} {spinner} {parser.finalizing_phase} '
+                f'· {done} {parser.unit} done · {fmt_dur(elapsed)}')
+    elif total and done > total:
         spinner = _SPINNER[int(elapsed * 20) % len(_SPINNER)]
         head = (f'{bar(100.0, bar_width)} {spinner} {_finalizing_phase(last_raw)} '
                 f'· {done} {parser.unit} · {fmt_dur(elapsed)} elapsed')
-    elif total:
+    elif total and parser.unit == 'units':
+        # kernel: dry-run total is meaningful → real % (done/total).
         pct = min(done / total * 100, 100.0)
         rate = done / elapsed if elapsed > 0.3 else 0.0
         rem = max(total - done, 0)
         eta = (rem / rate) if rate else None
         eta_s = fmt_dur(eta) if eta else '--'
         head = f'{bar(pct, bar_width)} {done}/{total} {parser.unit} ({pct:.0f}%) {rate:.1f}/s ETA {eta_s}'
-        # buildroot's package-level % is coarse (one pkg can configure for minutes
-        # while the bar sits at N/(N+1) pkgs). Show the current pkg:stage so the
-        # user knows WHERE it is, not just how many pkgs rotated. Kernel doesn't
-        # need this — its current_label (CC path) already shows on the raw line.
-        if parser.unit == 'pkgs' and parser.current_label:
-            label = parser.current_label
-            if getattr(parser, 'inner_count', 0):
-                label += f' · {parser.inner_count} steps'
-            head += f'  [{label}]'
     else:
+        # indeterminate: buildroot always (its total is info-only, below), or
+        # kernel when no --total was pre-scanned.
         rate = done / elapsed if elapsed > 0.3 else 0.0
         head = f'{done} {parser.unit} done  {rate:.1f}/s  elapsed {fmt_dur(elapsed)}'
+        if total:
+            # buildroot: show-targets total as an info label, NOT a %. Incremental
+            # builds skip already-built pkgs (no >>> line) so `done` undercounts —
+            # done/total would mislead. The label gives context without lying.
+            head += f'  All Packages: {total}'
+    # buildroot's package-level % is coarse (one pkg can configure for minutes
+    # while the bar sits at N/(N+1) pkgs), so append the current pkg:stage — and,
+    # for the active pkg, a finer in-pkg signal: ninja done/total (%) for
+    # meson/cmake-ninja pkgs, else the make step count. Applied in ALL bar modes
+    # (total / indeterminate / finalizing) so a buildroot run with no global total
+    # still shows in-pkg progress. Kernel (unit=units) skips it.
+    if parser.unit == 'pkgs' and parser.current_label and not getattr(parser, 'finalizing', False):
+        label = parser.current_label
+        if getattr(parser, 'ninja_total', 0):  # meson ninja: [done/total]
+            ipct = parser.ninja_done * 100 // parser.ninja_total
+            label += f' · ninja {parser.ninja_done}/{parser.ninja_total} ({ipct}%)'
+        elif getattr(parser, 'ninja_pct', -1) >= 0:  # cmake ninja: [NN%]
+            label += f' · ninja {parser.ninja_pct}%'
+        elif getattr(parser, 'inner_count', 0):  # autotools/make pkg: step count
+            label += f' · {parser.inner_count} steps'
+        head += f'  [{label}]'
     if log_path:
         head += f'  log: {log_path}'
     return head
 
 
-def render_frame(parser, total, elapsed, log_path, last_raw):
-    """Two-line display: [bar + ETA + log path] over [latest raw make line].
-    The live raw line gives the 'it's alive' flow the bare bar lacked (so the
-    bar doesn't feel frozen / ninja-quiet during a long compile); the full
+def render_frame(parser, total, elapsed, log_path, raw_lines, tail=5):
+    """bar (l1) over up to `tail` recent raw build lines (sliding window). The
+    body is padded with blanks to a FIXED `tail` slot count, so the cursor-up
+    in-place redraw leaves no residue when the window is still filling (fewer
+    than `tail` lines seen so far) — lines_drawn stays constant across frames.
+    The live raw lines give the 'it's alive' flow the bare bar lacked; the full
     output is tee'd to log_path by the caller for later reference."""
     cols = term_width()
+    last_raw = raw_lines[-1] if raw_lines else ''
     l1 = render_bar(parser, total, elapsed, log_path, last_raw=last_raw)
     if len(l1) > cols:
         l1 = l1[:cols - 1] + '…'
-    l2 = ('  ' + last_raw) if last_raw else ''
-    if len(l2) > cols:
-        l2 = l2[:cols - 1] + '…'
-    return l1, l2
+    body = []
+    for line in list(raw_lines)[-tail:]:
+        s = ('  ' + line) if line else ''
+        if len(s) > cols:
+            s = s[:cols - 1] + '…'
+        body.append(s)
+    body += [''] * (tail - len(body))  # fixed slot count → no redraw residue
+    return l1, body
 
 
 class NativeRenderer:
@@ -123,9 +153,10 @@ class NativeRenderer:
     it via begin(total) → tick(per line) → end → error_dump. Wraps the stateless
     render_frame/render_bar above; behavior is identical to the pre-backend cli."""
 
-    def __init__(self, is_tty, log_path=''):
+    def __init__(self, is_tty, log_path='', tail=5):
         self.is_tty = is_tty
         self.log = log_path
+        self.tail = max(1, tail)
         self.last_render = 0.0
         self.lines_drawn = 0
         self.last_snap_done = 0
@@ -144,17 +175,24 @@ class NativeRenderer:
             sys.stderr.write(ESC + '[?25l')  # hide cursor
             sys.stderr.flush()
 
-    def tick(self, parser, total, elapsed, last_raw):
+    def tick(self, parser, total, elapsed, recent_lines):
         if self.is_tty:
-            # Refresh ~10fps so the live raw line keeps flowing.
+            # Refresh ~10fps so the live raw lines keep flowing.
             if (elapsed - self.last_render) >= 0.1:
                 self.last_render = elapsed
-                l1, l2 = render_frame(parser, total, elapsed, self.log, last_raw)
+                l1, body = render_frame(parser, total, elapsed, self.log, recent_lines, self.tail)
                 if self.lines_drawn == 0:
-                    sys.stderr.write(l1 + '\n' + l2)
-                    self.lines_drawn = 2
+                    sys.stderr.write(l1)
+                    for b in body:
+                        sys.stderr.write('\n' + b)
+                    self.lines_drawn = 1 + len(body)
                 else:
-                    sys.stderr.write(ESC + '[1A\r' + ESC + '[K' + l1 + '\n' + ESC + '[K' + l2)
+                    # cursor up to the bar line, redraw bar + body (each cleared).
+                    # lines_drawn is fixed (tail slots padded) so no residue as
+                    # the window fills from 1 → tail lines.
+                    sys.stderr.write(ESC + f'[{self.lines_drawn}A\r' + ESC + '[K' + l1)
+                    for b in body:
+                        sys.stderr.write('\n' + ESC + '[K' + b)
                 sys.stderr.flush()
         else:
             fire = (self.snap_event_step and (parser.done - self.last_snap_done) >= self.snap_event_step) or \
@@ -163,19 +201,27 @@ class NativeRenderer:
                 if self.snap_event_step:
                     self.last_snap_done = parser.done
                 self.last_snap_time = elapsed
-                sys.stderr.write(render_bar(parser, total, elapsed, self.log) + '\n')
+                last_raw = recent_lines[-1] if recent_lines else ''
+                sys.stderr.write(render_bar(parser, total, elapsed, self.log, last_raw=last_raw) + '\n')
 
-    def end(self, parser, total, elapsed, last_raw):
+    def end(self, parser, total, elapsed, recent_lines):
         if self.is_tty:
-            l1, l2 = render_frame(parser, total, elapsed, self.log, last_raw)
+            l1, body = render_frame(parser, total, elapsed, self.log, recent_lines, self.tail)
             if self.lines_drawn == 0:
-                sys.stderr.write(l1 + '\n' + l2 + '\n')
+                sys.stderr.write(l1)
+                for b in body:
+                    sys.stderr.write('\n' + b)
+                sys.stderr.write('\n')
             else:
-                sys.stderr.write(ESC + '[1A\r' + ESC + '[K' + l1 + '\n' + ESC + '[K' + l2 + '\n')
+                sys.stderr.write(ESC + f'[{self.lines_drawn}A\r' + ESC + '[K' + l1)
+                for b in body:
+                    sys.stderr.write('\n' + ESC + '[K' + b)
+                sys.stderr.write('\n')
             sys.stderr.write(ESC + '[?25h')  # show cursor
             sys.stderr.flush()
         else:
-            sys.stderr.write(render_bar(parser, total, elapsed, self.log) + '\n')
+            last_raw = recent_lines[-1] if recent_lines else ''
+            sys.stderr.write(render_bar(parser, total, elapsed, self.log, last_raw=last_raw) + '\n')
 
     def error_dump(self, recent):
         sys.stderr.write('\n' + '=' * 60 + '\n')

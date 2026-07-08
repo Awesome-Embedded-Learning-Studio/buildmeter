@@ -14,13 +14,14 @@ except ImportError:
     _RICH_AVAILABLE = False
 
 
-def get_renderer(is_tty, log_path=''):
-    """Pick the render backend: rich if installed, else native ANSI."""
+def get_renderer(is_tty, log_path='', tail=5):
+    """Pick the render backend: rich if installed, else native ANSI. `tail` is
+    how many recent raw build lines to show under the bar (sliding window)."""
     if _RICH_AVAILABLE:
         from buildmeter.render.rich import RichRenderer
-        return RichRenderer(is_tty, log_path)
+        return RichRenderer(is_tty, log_path, tail)
     from buildmeter.render.native import NativeRenderer
-    return NativeRenderer(is_tty, log_path)
+    return NativeRenderer(is_tty, log_path, tail)
 
 
 from buildmeter.render.native import ESC, render_bar, render_frame
